@@ -109,6 +109,11 @@ body {
   gap: 16px;
 }
 
+.palette__heading {
+  display: grid;
+  gap: 10px;
+}
+
 .palette__eyebrow {
   margin: 0 0 6px;
   color: var(--accent);
@@ -123,6 +128,33 @@ body {
   font-size: clamp(1.8rem, 4vw, 2.7rem);
   line-height: 1.04;
   letter-spacing: -0.04em;
+}
+
+.palette__back {
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  color: var(--accent);
+  background: none;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 160ms ease;
+}
+
+.palette__back:hover {
+  color: var(--text);
+}
+
+.palette__lede {
+  margin: 0;
+  max-width: 44ch;
+  color: var(--muted);
+  font-size: 0.94rem;
+  line-height: 1.45;
 }
 
 .palette__badge {
@@ -221,6 +253,10 @@ body {
   opacity: 0.72;
 }
 
+.result--disabled {
+  cursor: default;
+}
+
 .result__copy {
   display: grid;
   gap: 4px;
@@ -296,6 +332,14 @@ body {
 
   .palette__header {
     flex-direction: column;
+  }
+
+  .palette__heading {
+    gap: 8px;
+  }
+
+  .palette__lede {
+    max-width: none;
   }
 
   .palette__badge {

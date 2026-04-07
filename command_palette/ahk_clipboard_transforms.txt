@@ -1,0 +1,93 @@
+; CONCEPTUAL REFERENCE ONLY
+; ──────────────────────────────────────────────────────────────
+; Clipboard text transformers – works on selected text anywhere
+; ──────────────────────────────────────────────────────────────
+
+^+u:: {                                      ; Ctrl+Shift+U → UPPERCASE
+    saved := ClipboardAll()
+    A_Clipboard := StrUpper(A_Clipboard)
+    A_Clipboard := StrUpper(A_Clipboard)
+    Send "{Blind}^v"
+    Clipboard := saved
+    saved := ""
+}
+
+^+l:: {                                      ; Ctrl+Shift+L → lowercase
+    saved := ClipboardAll()
+    A_Clipboard := StrLower(A_Clipboard)
+    Send "{Blind}^v"
+    Clipboard := saved
+    saved := ""
+}
+
+^+t:: {                                      ; Ctrl+Shift+T → Title Case
+    saved := ClipboardAll()
+    A_Clipboard := StrTitle(A_Clipboard)
+    Send "{Blind}^v"
+    Clipboard := saved
+    saved := ""
+}
+
+^+c:: {                                      ; Ctrl+Shift+C → Capitalize Each Word
+    saved := ClipboardAll()
+    A_Clipboard := RegExReplace(A_Clipboard, "(\w)([\w']*)", "$U1$L2")
+    Send "{Blind}^v"
+    Clipboard := saved
+    saved := ""
+}
+
+^+/:: {                                      ; Ctrl+Shift+/ → backslashes to forward slashes (paths only)
+    saved := ClipboardAll()
+    ClipWait 0.2
+    clip := A_Clipboard
+
+    if RegExMatch(clip, "i)^[A-Z]:\\") || RegExMatch(clip, "^\\\\") {
+        A_Clipboard := StrReplace(clip, "\", "/")
+    }
+
+    Send "{Blind}^v"
+    Clipboard := saved
+    saved := ""
+}
+
+^+\:: {                                     ; Ctrl+Shift+\ → forward slashes to backslashes (paths only)
+    saved := ClipboardAll()
+    ClipWait 0.2
+    clip := A_Clipboard
+
+    if RegExMatch(clip, "i)^[A-Z]:/") || RegExMatch(clip, "^//") {
+        A_Clipboard := StrReplace(clip, "/", "\")
+    }
+
+    Send "{Blind}^v"
+    Clipboard := saved
+    saved := ""
+}
+
+^+s:: {  ; Ctrl+Shift+S → lower_snake_case
+    saved := ClipboardAll()
+    ClipWait 0.2
+    clip := A_Clipboard
+
+    ; Step 1: break camelCase / PascalCase → camel_Case
+    clip := RegExReplace(clip, "([a-z0-9])([A-Z])", "$1_$2")
+
+    ; Step 2: replace spaces & hyphens with underscores
+    clip := RegExReplace(clip, "[\s\-]+", "_")
+
+    ; Step 3: remove non-alphanumeric/underscore
+    clip := RegExReplace(clip, "[^a-zA-Z0-9_]", "")
+
+    ; Step 4: collapse multiple underscores
+    clip := RegExReplace(clip, "_{2,}", "_")
+
+    ; Step 5: trim leading/trailing underscores
+    clip := RegExReplace(clip, "^_|_$")
+
+    ; Step 6: lowercase
+    A_Clipboard := StrLower(clip)
+
+    Send "{Blind}^v"
+    Clipboard := saved
+    saved := ""
+}
