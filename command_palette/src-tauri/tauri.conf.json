@@ -12,9 +12,16 @@
   "app": {
     "windows": [
       {
-        "title": "command_palette",
-        "width": 800,
-        "height": 600
+        "label": "main",
+        "title": "Command Palette",
+        "width": 720,
+        "height": 420,
+        "center": true,
+        "visible": false,
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true
       }
     ],
     "security": {
