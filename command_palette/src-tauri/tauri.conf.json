@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "Command Palette",
-        "width": 720,
-        "height": 420,
+        "width": 760,
+        "height": 520,
         "center": true,
         "visible": false,
         "decorations": false,

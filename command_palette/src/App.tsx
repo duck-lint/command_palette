@@ -7,10 +7,17 @@ import {
 import "./App.css";
 
 type ViewKey = "groups" | "clipboard-transforms";
+type StatusTone = "info" | "success" | "warning" | "error" | "busy";
+
+type StatusState = {
+  message: string;
+  tone: StatusTone;
+};
 
 type CommandOutcome = {
   message: string;
   hide: boolean;
+  tone: StatusTone;
 };
 
 type CommandItem =
@@ -29,23 +36,21 @@ type CommandItem =
       hint: string;
       accent: string;
       run: () => Promise<CommandOutcome>;
-    }
-  | {
-      kind: "disabled";
-      id: string;
-      title: string;
-      hint: string;
-      accent: string;
     };
+
+const DEFAULT_STATUS: StatusState = {
+  message: "Ready. Ctrl + Alt + Space opens the palette.",
+  tone: "info",
+};
 
 const VIEW_TITLES: Record<ViewKey, string> = {
   groups: "Command Palette",
   "clipboard-transforms": "Clipboard Transforms",
 };
 
-const VIEW_DESCRIPTIONS: Record<ViewKey, string> = {
-  groups: "Choose a command family.",
-  "clipboard-transforms": "Clipboard-only transforms inspired by the AutoHotkey shortcuts.",
+const SEARCH_PLACEHOLDERS: Record<ViewKey, string> = {
+  groups: "Search command groups...",
+  "clipboard-transforms": "Search clipboard transforms...",
 };
 
 const appWindow = getCurrentWebviewWindow();
@@ -92,6 +97,10 @@ function looksLikeSlashPath(text: string) {
   return /^[a-z]:\//i.test(text) || text.startsWith("//");
 }
 
+function pluralize(count: number, singular: string, plural: string) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 async function transformClipboardText(
   transform: (text: string) => string | null,
   successMessage: string,
@@ -104,6 +113,7 @@ async function transformClipboardText(
     return {
       message: skipMessage,
       hide: false,
+      tone: "warning",
     };
   }
 
@@ -112,6 +122,7 @@ async function transformClipboardText(
   return {
     message: successMessage,
     hide: true,
+    tone: "success",
   };
 }
 
@@ -229,10 +240,17 @@ const CLIPBOARD_TRANSFORM_COMMANDS: CommandItem[] = [
 
 function App() {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const backButtonRef = useRef<HTMLButtonElement | null>(null);
+  const resultsViewportRef = useRef<HTMLDivElement | null>(null);
+  const resultRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+
   const [view, setView] = useState<ViewKey>("groups");
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [status, setStatus] = useState("Ready. Ctrl + Alt + Space opens the palette.");
+  const [status, setStatus] = useState<StatusState>(DEFAULT_STATUS);
+  const [isRunning, setIsRunning] = useState(false);
+  const [hasOverflowAbove, setHasOverflowAbove] = useState(false);
+  const [hasOverflowBelow, setHasOverflowBelow] = useState(false);
 
   const commands = view === "groups" ? ROOT_COMMANDS : CLIPBOARD_TRANSFORM_COMMANDS;
 
@@ -250,25 +268,40 @@ function App() {
     );
   });
 
-  const visibleCommands =
-    filteredCommands.length > 0
-      ? filteredCommands
-      : [
-          {
-            kind: "disabled" as const,
-            id: "empty",
-            title: "No matching commands",
-            hint: "Try a different search term.",
-            accent: view === "groups" ? "Groups" : "Transforms",
-          },
-        ];
-
   const activeCommand =
-    visibleCommands[Math.min(selectedIndex, visibleCommands.length - 1)] ?? visibleCommands[0];
+    filteredCommands[Math.min(selectedIndex, Math.max(filteredCommands.length - 1, 0))];
+  const activeOptionId = activeCommand ? `palette-option-${activeCommand.id}` : undefined;
+  const resultCountLabel =
+    view === "groups"
+      ? pluralize(filteredCommands.length, "group", "groups")
+      : pluralize(filteredCommands.length, "action", "actions");
 
-  async function dismissPalette(message?: string) {
+  function focusSearch() {
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+  }
+
+  function updateOverflowIndicators() {
+    const viewport = resultsViewportRef.current;
+
+    if (!viewport || filteredCommands.length === 0) {
+      setHasOverflowAbove(false);
+      setHasOverflowBelow(false);
+      return;
+    }
+
+    const epsilon = 1;
+    setHasOverflowAbove(viewport.scrollTop > epsilon);
+    setHasOverflowBelow(viewport.scrollTop + viewport.clientHeight < viewport.scrollHeight - epsilon);
+  }
+
+  async function dismissPalette(message?: string, tone: StatusTone = "info") {
     if (message) {
-      setStatus(message);
+      setStatus({
+        message,
+        tone,
+      });
     }
 
     setQuery("");
@@ -281,54 +314,69 @@ function App() {
     setView("groups");
     setQuery("");
     setSelectedIndex(0);
-    setStatus(message);
+    setStatus({
+      message,
+      tone: "info",
+    });
   }
 
   function openClipboardTransforms() {
     setView("clipboard-transforms");
     setQuery("");
     setSelectedIndex(0);
-    setStatus("Clipboard Transforms opened.");
+    setStatus({
+      message: "Clipboard Transforms opened.",
+      tone: "info",
+    });
   }
 
-  async function runCommand(command: CommandItem) {
-    if (command.kind === "disabled") {
-      setStatus(view === "groups" ? "No command groups matched that search." : "No transforms matched that search.");
+  async function runCommand(command: CommandItem | undefined) {
+    if (!command || isRunning) {
       return;
     }
 
     if (command.kind === "group") {
-      openClipboardTransforms();
+      if (command.nextView === "clipboard-transforms") {
+        openClipboardTransforms();
+      }
       return;
     }
+
+    setIsRunning(true);
+    setStatus({
+      message: `Running ${command.title}...`,
+      tone: "busy",
+    });
 
     try {
       const outcome = await command.run();
 
       if (outcome.hide) {
-        await dismissPalette(outcome.message);
+        await dismissPalette(outcome.message, outcome.tone);
         return;
       }
 
-      setStatus(outcome.message);
+      setStatus({
+        message: outcome.message,
+        tone: outcome.tone,
+      });
     } catch (error) {
-      setStatus(formatErrorMessage(error));
+      setStatus({
+        message: formatErrorMessage(error),
+        tone: "error",
+      });
+    } finally {
+      setIsRunning(false);
     }
   }
 
   useEffect(() => {
-    const focusSearch = () => {
-      window.requestAnimationFrame(() => {
-        inputRef.current?.focus();
-      });
-    };
-
     const handleWindowFocus = () => {
       focusSearch();
     };
 
     const handleDocumentKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !isRunning) {
         event.preventDefault();
         void dismissPalette("Returned to tray.");
       }
@@ -342,36 +390,133 @@ function App() {
       window.removeEventListener("focus", handleWindowFocus);
       document.removeEventListener("keydown", handleDocumentKeyDown);
     };
-  }, []);
+  }, [isRunning]);
 
   useEffect(() => {
     setSelectedIndex(0);
-    window.requestAnimationFrame(() => {
-      inputRef.current?.focus();
-    });
+    focusSearch();
   }, [view]);
+
+  useEffect(() => {
+    setSelectedIndex((current) => Math.min(current, Math.max(filteredCommands.length - 1, 0)));
+    window.requestAnimationFrame(updateOverflowIndicators);
+  }, [filteredCommands.length, query, view]);
+
+  useEffect(() => {
+    if (!activeCommand) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      resultRefs.current[activeCommand.id]?.scrollIntoView({
+        block: "nearest",
+        behavior: "smooth",
+      });
+      updateOverflowIndicators();
+    });
+  }, [activeCommand?.id]);
+
+  function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (filteredCommands.length > 0) {
+        setSelectedIndex((current) => Math.min(current + 1, filteredCommands.length - 1));
+      }
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (filteredCommands.length > 0) {
+        setSelectedIndex((current) => Math.max(current - 1, 0));
+      }
+      return;
+    }
+
+    if (event.key === "Home") {
+      event.preventDefault();
+      setSelectedIndex(0);
+      return;
+    }
+
+    if (event.key === "End") {
+      event.preventDefault();
+      if (filteredCommands.length > 0) {
+        setSelectedIndex(filteredCommands.length - 1);
+      }
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void runCommand(activeCommand);
+      return;
+    }
+
+    if (
+      (event.key === "Backspace" && query.trim().length === 0 && view !== "groups") ||
+      (event.altKey && event.key === "ArrowLeft" && view !== "groups")
+    ) {
+      event.preventDefault();
+      returnToGroups();
+      return;
+    }
+
+    if (event.key === "Tab") {
+      event.preventDefault();
+      if (view !== "groups" && backButtonRef.current) {
+        backButtonRef.current.focus();
+      } else {
+        focusSearch();
+      }
+      return;
+    }
+
+    if (event.key === "Escape" && !isRunning) {
+      event.preventDefault();
+      event.stopPropagation();
+      void dismissPalette("Returned to tray.");
+    }
+  }
+
+  function handleBackKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "Tab") {
+      event.preventDefault();
+      focusSearch();
+      return;
+    }
+
+    if (event.key === "Escape" && !isRunning) {
+      event.preventDefault();
+      void dismissPalette("Returned to tray.");
+    }
+  }
 
   return (
     <main className="app-shell">
-      <section className="palette" aria-label="Command palette">
+      <section className="palette" aria-label="Command palette" aria-busy={isRunning}>
         <header className="palette__header">
           <div className="palette__heading">
             {view !== "groups" ? (
-              <button type="button" className="palette__back" onClick={() => returnToGroups()}>
-                Back to groups
+              <button
+                ref={backButtonRef}
+                type="button"
+                className="palette__back"
+                onClick={() => returnToGroups()}
+                onKeyDown={handleBackKeyDown}
+                disabled={isRunning}
+              >
+                Back
               </button>
             ) : null}
 
-            <div>
-              <p className="palette__eyebrow">{view === "groups" ? "Tray first" : "Clipboard transforms"}</p>
-              <h1 className="palette__title">{VIEW_TITLES[view]}</h1>
-            </div>
-
-            <p className="palette__lede">{VIEW_DESCRIPTIONS[view]}</p>
+            <h1 id="palette-title" className="palette__title">
+              {VIEW_TITLES[view]}
+            </h1>
           </div>
 
-          <div className="palette__badge">
-            {view === "groups" ? `${ROOT_COMMANDS.length} group` : `${CLIPBOARD_TRANSFORM_COMMANDS.length} actions`}
+          <div className={`palette__badge palette__badge--${isRunning ? "busy" : "ready"}`}>
+            {isRunning ? "Working" : resultCountLabel}
           </div>
         </header>
 
@@ -384,81 +529,70 @@ function App() {
             value={query}
             autoComplete="off"
             spellCheck={false}
-            placeholder={view === "groups" ? "Search command groups..." : "Search clipboard transforms..."}
+            placeholder={SEARCH_PLACEHOLDERS[view]}
+            aria-controls="palette-results"
+            aria-activedescendant={activeOptionId}
+            disabled={isRunning}
             onChange={(event) => {
               setQuery(event.currentTarget.value);
               setSelectedIndex(0);
             }}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowDown") {
-                event.preventDefault();
-                setSelectedIndex((current) => Math.min(current + 1, visibleCommands.length - 1));
-              }
-
-              if (event.key === "ArrowUp") {
-                event.preventDefault();
-                setSelectedIndex((current) => Math.max(current - 1, 0));
-              }
-
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void runCommand(activeCommand);
-              }
-
-              if (event.key === "Escape") {
-                event.preventDefault();
-                event.stopPropagation();
-                void dismissPalette("Returned to tray.");
-              }
-            }}
+            onKeyDown={handleSearchKeyDown}
           />
         </label>
 
-        <ul
-          className="results"
-          aria-label={view === "groups" ? "Available command groups" : "Available clipboard transforms"}
-        >
-          {visibleCommands.map((command, index) => {
-            const isActive = index === selectedIndex;
-            const buttonClassName =
-              command.kind === "disabled"
-                ? "result result--disabled"
-                : isActive
-                  ? "result result--active"
-                  : "result";
+        {filteredCommands.length > 0 ? (
+          <div
+            className={`results-shell${hasOverflowAbove ? " results-shell--top" : ""}${hasOverflowBelow ? " results-shell--bottom" : ""}`}
+          >
+            <div ref={resultsViewportRef} className="results-scroll" onScroll={updateOverflowIndicators}>
+              <ul id="palette-results" className="results" role="listbox" aria-labelledby="palette-title">
+                {filteredCommands.map((command, index) => {
+                  const isActive = index === selectedIndex;
+                  const optionId = `palette-option-${command.id}`;
 
-            return (
-              <li key={command.id}>
-                <button
-                  type="button"
-                  className={buttonClassName}
-                  data-active={isActive && command.kind !== "disabled"}
-                  disabled={command.kind === "disabled"}
-                  onMouseEnter={() => setSelectedIndex(index)}
-                  onClick={() => {
-                    void runCommand(command);
-                  }}
-                >
-                  <div className="result__copy">
-                    <span className="result__title">{command.title}</span>
-                    <span className="result__hint">{command.hint}</span>
-                  </div>
-                  <span className="result__accent">{command.accent}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+                  return (
+                    <li key={command.id}>
+                      <button
+                        ref={(element) => {
+                          resultRefs.current[command.id] = element;
+                        }}
+                        id={optionId}
+                        type="button"
+                        role="option"
+                        aria-selected={isActive}
+                        tabIndex={-1}
+                        className={isActive ? "result result--active" : "result"}
+                        data-active={isActive}
+                        disabled={isRunning}
+                        onMouseEnter={() => setSelectedIndex(index)}
+                        onClick={() => {
+                          void runCommand(command);
+                        }}
+                      >
+                        <div className="result__copy">
+                          <span className="result__title">{command.title}</span>
+                          <span className="result__hint">{command.hint}</span>
+                        </div>
+                        <span className="result__accent">{command.accent}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          </div>
+        ) : (
+          <section className="empty-state" aria-live="polite">
+            <p className="empty-state__title">No matching commands</p>
+            <p className="empty-state__copy">Try a different search term or clear the search to see everything in this view.</p>
+          </section>
+        )}
 
         <footer className="palette__footer">
-          <p className="status">{status}</p>
-
-          <div className="shortcuts" aria-label="Keyboard shortcuts">
-            <span className="kbd">Ctrl + Alt + Space</span>
-            {view !== "groups" ? <span className="kbd">Back</span> : null}
-            <span className="kbd">Esc</span>
-            <span className="kbd">Enter</span>
-          </div>
+          <p className={`status status--${status.tone}`} aria-live="polite">
+            <span>{status.message}</span>
+          </p>
         </footer>
       </section>
     </main>
